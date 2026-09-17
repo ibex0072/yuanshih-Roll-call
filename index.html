@@ -79,6 +79,14 @@ button{cursor:pointer}
 .smeta{display:flex;gap:10px;align-items:flex-end}
 .smeta .fld{width:110px}
 
+.trow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 0 4px}
+.tlabel{font-size:13px;color:var(--muted)}
+.tchips{display:flex;gap:6px;flex-wrap:wrap}
+.tchip{border:1px solid var(--rule);background:#fff;border-radius:99px;padding:4px 14px;font-size:14px}
+.tchip:hover{border-color:var(--board)}
+.tchip.on{background:var(--board);border-color:var(--board);color:#fff;font-weight:500}
+.tother{border:0;border-bottom:1px dashed var(--rule);background:transparent;padding:4px 2px;font-size:14px;width:110px}
+.tother:focus{outline:none;border-bottom-color:var(--board)}
 .mhead{display:flex;justify-content:space-between;align-items:center;padding:12px 0 6px;font-size:13px;color:var(--muted)}
 .mrow{display:grid;grid-template-columns:minmax(80px,140px) auto 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--rule-soft)}
 .mname{font:600 18px var(--serif)}
@@ -212,6 +220,7 @@ const STATUSES = [
   { name: '請假', ch: '假', k: 's-leave' },
   { name: '缺席', ch: '缺', k: 's-absent' }
 ];
+const DEFAULT_TEACHER = '璇';   // 沒有指定老師的課，預設帶入
 const CH = Object.fromEntries(STATUSES.map(s => [s.name, s.ch]));
 const WD = '日一二三四五六';
 const $ = s => document.querySelector(s);
@@ -324,13 +333,30 @@ function openTarget(type, name, subject, hoursHint) {
     date: DAY.date, type, target: name, subject, members,
     hours: ss ? ss.hours : (Number(hoursHint) || 1.5),
     progress: ss ? ss.progress : '', note: ss ? ss.note : '',
-    teacher: ss ? ss.teacher : ((ind && ind.teacher) || (group && group.teacher) || store.get('att_teacher')),
+    teacher: ss ? ss.teacher : ((ind && ind.teacher) || (group && group.teacher) || DEFAULT_TEACHER),
     existing: !!ss
   };
   rollType = type; setSeg('#rollSeg', type);
   $('#rollSearch').value = '';
   fillSelect($('#rollTarget'), type, '', `${type}|${name}|${subject}`);
   renderSheet(); renderDayList(); loadLast();
+}
+
+/** 老師快選清單：預設老師 → 學生資料裡的老師 → 曾經手動輸入過的老師 */
+function teacherList() {
+  const list = [DEFAULT_TEACHER];
+  const add = t => { t = (t || '').trim(); if (t && !list.includes(t)) list.push(t); };
+  DB.individuals.forEach(s => add(s.teacher));
+  DB.groups.forEach(g => add(g.teacher));
+  DAY.sessions.forEach(s => add(s.teacher));
+  try { JSON.parse(store.get('att_teachers') || '[]').forEach(add); } catch (e) {}
+  return list;
+}
+function rememberTeacher(t) {
+  if (!t || teacherList().includes(t)) return;
+  let saved = [];
+  try { saved = JSON.parse(store.get('att_teachers') || '[]'); } catch (e) {}
+  saved.push(t); store.set('att_teachers', JSON.stringify(saved));
 }
 
 function renderSheet() {
@@ -347,8 +373,13 @@ function renderSheet() {
       </div>
       <div class="smeta">
         <label class="fld">時數<input type="number" step="0.5" min="0" id="fHours" value="${c.hours}"></label>
-        <label class="fld">老師<input id="fTeacher" value="${esc(c.teacher)}"></label>
       </div>
+    </div>
+    <div class="trow">
+      <span class="tlabel">老師</span>
+      <div class="tchips" role="radiogroup" aria-label="老師">${teacherList(c.teacher).map(t =>
+        `<button class="tchip ${t === c.teacher ? 'on' : ''}" data-t="${esc(t)}" role="radio" aria-checked="${t === c.teacher}">${esc(t)}</button>`).join('')}</div>
+      <input class="tother" id="fTeacher" placeholder="其他老師" value="${teacherList(c.teacher).includes(c.teacher) ? '' : esc(c.teacher)}">
     </div>
     <div class="mhead"><span>${c.members.length} 位學生</span>${c.members.length > 1 ? '<button class="btn" id="allIn">全部到課</button>' : ''}</div>
     ${c.type === '團班' && !c.members.length ? '<div class="hint">這個團班在學生資料分頁還沒有成員（所屬團班欄位空白），可以從下方先加入學生。</div>' : ''}
@@ -378,7 +409,14 @@ function renderSheet() {
     </div>`;
 
   $('#fHours').oninput = e => c.hours = e.target.value;
-  $('#fTeacher').oninput = e => c.teacher = e.target.value;
+  $('#fTeacher').oninput = e => {
+    c.teacher = e.target.value.trim();
+    el.querySelectorAll('.tchip').forEach(x => { const on = x.dataset.t === c.teacher; x.classList.toggle('on', on); x.setAttribute('aria-checked', on); });
+  };
+  el.querySelectorAll('.tchip').forEach(b => b.onclick = () => {
+    c.teacher = b.dataset.t; $('#fTeacher').value = '';
+    el.querySelectorAll('.tchip').forEach(x => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-checked', on); });
+  });
   $('#fProgress').oninput = e => c.progress = e.target.value;
   $('#fNote').oninput = e => c.note = e.target.value;
   el.querySelectorAll('.seal').forEach(b => b.onclick = () => {
@@ -427,7 +465,7 @@ async function save() {
       hours: Number(c.hours) || 0, progress: c.progress.trim(), note: c.note.trim(), teacher: c.teacher.trim(),
       attendees: c.members.map(m => ({ name: m.name, status: m.status, note: (m.note || '').trim() }))
     } });
-    if (c.teacher) store.set('att_teacher', c.teacher.trim());
+    rememberTeacher(c.teacher.trim());
     toast(c.existing ? '已更新點名' : '已儲存點名');
     lastCache = {};
     const r = await api('dayView', { date: c.date });
