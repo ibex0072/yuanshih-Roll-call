@@ -173,6 +173,7 @@ td.nw{white-space:nowrap;font-variant-numeric:tabular-nums}
       </div>
       <h3>當天課程 <small id="dayCount"></small></h3>
       <div id="dayList" class="daylist"><p class="muted">載入中…</p></div>
+      <p id="apiVer" class="muted" style="margin:12px 0 0;font-size:11px"></p>
     </aside>
 
     <section>
@@ -234,6 +235,7 @@ async function api(action, data = {}) {
     body: JSON.stringify({ action, ...data })
   });
   const j = await r.json();
+  if ($('#apiVer')) $('#apiVer').textContent = '後端版本：' + (j.version || '舊版（請重新部署）');
   if (!j.ok) throw new Error(j.error || '伺服器錯誤');
   return j;
 }
