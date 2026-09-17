@@ -57,6 +57,7 @@ button{cursor:pointer}
 .ditem .t{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .ditem .n{font-weight:500}
 .ditem .n small{color:var(--muted);font-weight:400;margin-left:4px}
+.ditem .n small.warn{color:var(--late)}
 .tag{font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid var(--rule);color:var(--muted);white-space:nowrap}
 .tag.done{border-color:var(--present);color:var(--present)}
 .muted{color:var(--muted);font-size:13px}
@@ -282,7 +283,7 @@ function dayItems() {
     const type = /團/.test(s.name) ? '團班' : '個人';
     const k = `${type}|${s.name}|${s.subject}`;
     idx[k] = items.length;
-    items.push({ k, type, name: s.name, subject: s.subject, hours: s.hours, time: s.start || '', session: null });
+    items.push({ k, type, name: s.name, subject: s.subject, hours: s.hours, time: s.start || '', session: null, unsure: !!s.subjectUnsure });
   });
   DAY.sessions.forEach(ss => {
     const k = `${ss.type}|${ss.target}|${ss.subject}`;
@@ -303,7 +304,7 @@ function renderDayList() {
   $('#dayList').innerHTML = items.map(i => `
     <button class="ditem ${i.k === curKey ? 'cur' : ''}" data-k="${esc(i.k)}" data-h="${i.hours || ''}">
       <span class="t">${esc(i.time || (i.hours ? i.hours + ' 小時' : ''))}</span>
-      <span class="n">${esc(i.name)}<small>${esc(i.subject)}</small></span>
+      <span class="n">${esc(i.name)}<small>${esc(i.subject)}</small>${i.unsure ? '<small class="warn">科目待確認</small>' : ''}</span>
       <span class="tag ${i.session ? 'done' : ''}">${i.session ? '已點名' : '未點名'}</span>
     </button>`).join('');
 }
