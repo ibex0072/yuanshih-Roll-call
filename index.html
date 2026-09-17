@@ -58,6 +58,16 @@ button{cursor:pointer}
 .ditem .n{font-weight:500}
 .ditem .n small{color:var(--muted);font-weight:400;margin-left:4px}
 .ditem .n small.warn{color:var(--late)}
+.batchbtn{width:100%;margin:2px 0 8px;border-style:dashed;color:var(--board)}
+.batchbar{margin-top:10px;padding-top:10px;border-top:2px solid var(--ink)}
+.batchbar p{margin:0 0 8px}
+.bbtns{display:flex;gap:8px}.bbtns .primary{flex:1;padding:9px 12px}
+.ditem.dim{opacity:.45;cursor:default}
+.cb{display:inline-block;width:16px;height:16px;border:1.5px solid var(--muted);border-radius:4px;vertical-align:-3px;margin-right:4px;position:relative}
+.cb.on{background:var(--board);border-color:var(--board)}
+.cb.on::after{content:"";position:absolute;left:4px;top:0;width:4px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.ditem{grid-template-columns:auto 1fr auto}
+.ditem .t{min-width:44px}
 .tag{font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid var(--rule);color:var(--muted);white-space:nowrap}
 .tag.done{border-color:var(--present);color:var(--present)}
 .muted{color:var(--muted);font-size:13px}
@@ -180,7 +190,12 @@ td.nw{white-space:nowrap;font-variant-numeric:tabular-nums}
         <button class="btn" id="nextDay">後一天</button>
       </div>
       <h3>當天課程 <small id="dayCount"></small></h3>
+      <button class="btn batchbtn" id="batchToggle" hidden>批次點名</button>
       <div id="dayList" class="daylist"><p class="muted">載入中…</p></div>
+      <div id="batchBar" class="batchbar" hidden>
+        <p class="muted">勾選的課全部記為「到」，老師與時數用預設值。有人請假或要寫進度，存完再點進去改。</p>
+        <div class="bbtns"><button class="btn" id="batchCancel">取消</button><button class="btn primary" id="batchGo">全部到課</button></div>
+      </div>
       <p id="apiVer" class="muted" style="margin:12px 0 0;font-size:11px"></p>
     </aside>
 
@@ -236,6 +251,7 @@ let DB = { individuals: [], groups: [] };
 let DAY = { date: '', schedule: [], sessions: [] };
 let cur = null;
 let rollType = '個人', histType = '個人';
+let batchMode = false, batchSel = new Set();
 
 async function api(action, data = {}) {
   const r = await fetch(GAS_URL, {
@@ -307,14 +323,22 @@ function renderDayList() {
   const items = dayItems();
   const done = items.filter(i => i.session).length;
   $('#dayCount').textContent = items.length ? `已點名 ${done}／${items.length}` : '';
+  const pending = items.filter(i => !i.session);
+  $('#batchToggle').hidden = batchMode || pending.length < 1;
+  $('#batchBar').hidden = !batchMode;
+  if (batchMode) {
+    [...batchSel].forEach(k => { if (!pending.some(i => i.k === k)) batchSel.delete(k); });
+    $('#batchGo').textContent = `全部到課（${batchSel.size} 堂）`;
+    $('#batchGo').disabled = !batchSel.size;
+  }
   if (!items.length) {
     $('#dayList').innerHTML = '<p class="muted">這天沒有排定的課。可以直接在右側選擇學生或團班點名。</p>';
     return;
   }
   const curKey = cur ? `${cur.type}|${cur.target}|${cur.subject}` : '';
   $('#dayList').innerHTML = items.map(i => `
-    <button class="ditem ${i.k === curKey ? 'cur' : ''}" data-k="${esc(i.k)}" data-h="${i.hours || ''}">
-      <span class="t">${esc(i.time || (i.hours ? i.hours + ' 小時' : ''))}</span>
+    <button class="ditem ${i.k === curKey && !batchMode ? 'cur' : ''} ${batchMode && i.session ? 'dim' : ''}" data-k="${esc(i.k)}" data-h="${i.hours || ''}" ${batchMode && i.session ? 'disabled' : ''}>
+      <span class="t">${batchMode && !i.session ? `<span class="cb ${batchSel.has(i.k) ? 'on' : ''}" aria-hidden="true"></span>` : ''}${esc(i.time || (i.hours ? i.hours + ' 小時' : ''))}</span>
       <span class="n">${esc(i.name)}<small>${esc(i.subject)}</small>${i.unsure ? '<small class="warn">科目待確認</small>' : ''}</span>
       <span class="tag ${i.session ? 'done' : ''}">${i.session ? '已點名' : '未點名'}</span>
     </button>`).join('');
@@ -492,6 +516,48 @@ async function del() {
   } catch (e) { toast('刪除失敗：' + e.message, true); }
 }
 
+/* ---------- 批次點名 ---------- */
+function defaultSession(item) {
+  const group = DB.groups.find(g => g.name === item.name && g.subject === item.subject);
+  const ind = DB.individuals.find(s => s.name === item.name && s.subject === item.subject);
+  const members = item.type === '團班' ? (group ? group.members : []) : [item.name];
+  return {
+    date: DAY.date, type: item.type, target: item.name, subject: item.subject,
+    hours: Number(item.hours) || 1.5, progress: '', note: '',
+    teacher: (ind && ind.teacher) || (group && group.teacher) || DEFAULT_TEACHER,
+    attendees: members.map(n => ({ name: n, status: '出席', note: '' }))
+  };
+}
+function startBatch() {
+  batchMode = true;
+  batchSel = new Set(dayItems().filter(i => !i.session && !i.unsure).map(i => i.k));
+  renderDayList();
+}
+function stopBatch() { batchMode = false; batchSel.clear(); renderDayList(); }
+async function runBatch() {
+  const items = dayItems().filter(i => batchSel.has(i.k));
+  const sessions = [], skipped = [];
+  items.forEach(i => { const s = defaultSession(i); s.attendees.length ? sessions.push(s) : skipped.push(i.name); });
+  if (!sessions.length) return toast('勾選的團班沒有成員，請個別點名', true);
+  const btn = $('#batchGo'); btn.disabled = true; btn.textContent = '儲存中…';
+  try {
+    await api('saveBatch', { sessions });
+    sessions.forEach(s => rememberTeacher(s.teacher));
+    lastCache = {};
+    const r = await api('dayView', { date: DAY.date });
+    DAY.schedule = r.schedule; DAY.sessions = r.sessions;
+    const curKey = cur ? `${cur.type}|${cur.target}|${cur.subject}` : '';
+    const reopen = cur && batchSel.has(curKey);
+    batchMode = false; batchSel.clear();
+    renderDayList();
+    if (reopen) openTarget(cur.type, cur.target, cur.subject, cur.hours);
+    toast(`已點名 ${sessions.length} 堂` + (skipped.length ? `；${skipped.join('、')} 沒有成員，請個別點名` : ''), !!skipped.length);
+  } catch (e) {
+    toast('批次點名失敗：' + e.message, true);
+    btn.disabled = false; btn.textContent = `全部到課（${batchSel.size} 堂）`;
+  }
+}
+
 /* ---------- 點名紀錄查詢 ---------- */
 async function runHist() {
   const key = $('#histTarget').value;
@@ -557,12 +623,19 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   $('#view-roll').hidden = t.dataset.view !== 'roll';
   $('#view-hist').hidden = t.dataset.view !== 'hist';
 });
-$('#date').onchange = loadDay;
-$('#prevDay').onclick = () => { $('#date').value = shiftDay($('#date').value, -1); loadDay(); };
-$('#nextDay').onclick = () => { $('#date').value = shiftDay($('#date').value, 1); loadDay(); };
-$('#todayBtn').onclick = () => { $('#date').value = ymd(new Date()); loadDay(); };
+$('#date').onchange = () => { batchMode = false; loadDay(); };
+$('#batchToggle').onclick = startBatch;
+$('#batchCancel').onclick = stopBatch;
+$('#batchGo').onclick = runBatch;
+$('#prevDay').onclick = () => { batchMode = false; $('#date').value = shiftDay($('#date').value, -1); loadDay(); };
+$('#nextDay').onclick = () => { batchMode = false; $('#date').value = shiftDay($('#date').value, 1); loadDay(); };
+$('#todayBtn').onclick = () => { batchMode = false; $('#date').value = ymd(new Date()); loadDay(); };
 $('#dayList').onclick = e => {
   const b = e.target.closest('.ditem'); if (!b) return;
+  if (batchMode) {
+    batchSel.has(b.dataset.k) ? batchSel.delete(b.dataset.k) : batchSel.add(b.dataset.k);
+    return renderDayList();
+  }
   const [type, name, subject] = b.dataset.k.split('|');
   openTarget(type, name, subject, b.dataset.h);
 };
