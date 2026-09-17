@@ -196,7 +196,8 @@ td.nw{white-space:nowrap;font-variant-numeric:tabular-nums}
         <p class="muted">勾選的課全部記為「到」，老師與時數用預設值。有人請假或要寫進度，存完再點進去改。</p>
         <div class="bbtns"><button class="btn" id="batchCancel">取消</button><button class="btn primary" id="batchGo">全部到課</button></div>
       </div>
-      <p id="apiVer" class="muted" style="margin:12px 0 0;font-size:11px"></p>
+      <p class="muted" style="margin:12px 0 0;font-size:11px;display:flex;justify-content:space-between;gap:8px">
+        <span id="apiVer"></span><a href="#" id="refreshBtn" style="color:var(--board)">重新讀取名單</a></p>
     </aside>
 
     <section>
@@ -261,6 +262,9 @@ async function api(action, data = {}) {
   });
   const j = await r.json();
   if ($('#apiVer')) $('#apiVer').textContent = '後端版本：' + (j.version || '舊版（請重新部署）');
+  // 自動存一份在瀏覽器，下次打開先顯示、背景再更新
+  if (j.ok && j.individuals) store.set('att_db', JSON.stringify({ individuals: j.individuals, groups: j.groups }));
+  if (j.ok && j.date && j.schedule) store.set('att_day_' + j.date, JSON.stringify({ schedule: j.schedule, sessions: j.sessions }));
   if (!j.ok) throw new Error(j.error || '伺服器錯誤');
   return j;
 }
@@ -285,7 +289,9 @@ function setSeg(segSel, type) {
 }
 
 /* ---------- 當天課程 ---------- */
-async function loadDay() {
+const readCache = k => { try { return JSON.parse(store.get(k) || 'null'); } catch (e) { return null; } };
+
+async function loadDay(action = 'dayView') {
   const date = $('#date').value;
   if (!date) return;
   DAY.date = date;
@@ -293,16 +299,48 @@ async function loadDay() {
   $('#sheet').className = 'panel sheet empty';
   $('#sheet').textContent = '從左側點選當天的課，或在上方選擇學生／團班開始點名。';
   $('#rollTarget').value = '';
-  $('#dayList').innerHTML = '<p class="muted">載入中…</p>';
-  $('#dayCount').textContent = '';
+  const cached = readCache('att_day_' + date);
+  if (cached && action !== 'refresh') {
+    DAY.schedule = cached.schedule; DAY.sessions = cached.sessions;
+    renderDayList();
+    $('#dayCount').textContent += '　更新中…';
+  } else {
+    $('#dayList').innerHTML = '<p class="muted">載入中…</p>';
+    $('#dayCount').textContent = '';
+  }
   try {
-    const r = await api('dayView', { date });
+    const r = await api(action, { date });
+    if (r.individuals) {
+      DB = { individuals: r.individuals, groups: r.groups };
+      fillSelect($('#rollTarget'), rollType, $('#rollSearch').value.trim(), $('#rollTarget').value);
+      fillSelect($('#histTarget'), histType, $('#histSearch').value.trim(), $('#histTarget').value);
+    }
     if (DAY.date !== date) return;
     DAY.schedule = r.schedule; DAY.sessions = r.sessions;
     renderDayList();
+    syncCur();
+    prefetch(date);
   } catch (e) {
-    $('#dayList').innerHTML = `<p class="muted">讀取失敗：${esc(e.message)}</p>`;
+    if (cached) { renderDayList(); toast('更新失敗，目前顯示的是上次的資料', true); }
+    else $('#dayList').innerHTML = `<p class="muted">讀取失敗：${esc(e.message)}</p>`;
   }
+}
+/** 背景資料更新後，若正在看的點名單還沒動過，就同步成最新狀態 */
+function syncCur() {
+  if (!cur || cur.dirty) return;
+  const ss = DAY.sessions.find(s => s.type === cur.type && s.target === cur.target && s.subject === cur.subject);
+  if (!!ss !== cur.existing) openTarget(cur.type, cur.target, cur.subject, cur.hours);
+}
+/** 預先抓前後一天，按「前一天／後一天」時可以立刻顯示 */
+let prefetchTimer;
+function prefetch(date) {
+  clearTimeout(prefetchTimer);
+  prefetchTimer = setTimeout(async () => {
+    for (const d of [shiftDay(date, 1), shiftDay(date, -1)]) {
+      if (DAY.date !== date) return;
+      try { await api('dayView', { date: d }); } catch (e) {}
+    }
+  }, 1200);
 }
 function dayItems() {
   const items = [], idx = {};
@@ -432,6 +470,8 @@ function renderSheet() {
       <button class="btn primary" id="saveBtn">${c.existing ? '更新點名' : '儲存點名'}</button>
     </div>`;
 
+  el.oninput = () => c.dirty = true;
+  el.onclick = e => { if (e.target.closest('.seal,.tchip,.rm,#allIn,#addBtn')) c.dirty = true; };
   $('#fHours').oninput = e => c.hours = e.target.value;
   $('#fTeacher').oninput = e => {
     c.teacher = e.target.value.trim();
@@ -661,23 +701,28 @@ $('#histGo').onclick = runHist;
 $('#histPrint').onclick = () => window.print();
 
 /* ---------- 啟動 ---------- */
-(async function init() {
-  $('#date').value = ymd(new Date());
+(function init() {
+  const today = ymd(new Date());
+  $('#date').value = today;
   if (!GAS_URL) {
     $('#setup').hidden = false; $('#view-roll').hidden = true;
     document.querySelector('.tabs').hidden = true;
     return;
   }
+  // 清掉兩週前的舊快取
   try {
-    const r = await api('init');
-    DB = { individuals: r.individuals, groups: r.groups };
+    const old = shiftDay(today, -14);
+    Object.keys(localStorage).forEach(k => { if (k.startsWith('att_day_') && k.slice(8) < old) localStorage.removeItem(k); });
+  } catch (e) {}
+  const cdb = readCache('att_db');
+  if (cdb) {
+    DB = cdb;
     fillSelect($('#rollTarget'), '個人', '');
     fillSelect($('#histTarget'), '個人', '');
-    loadDay();
-  } catch (e) {
-    $('#dayList').innerHTML = `<p class="muted">連線失敗：${esc(e.message)}。請確認 GAS_URL 正確，並從上線網址開啟。</p>`;
   }
+  loadDay('boot');
 })();
+$('#refreshBtn').onclick = e => { e.preventDefault(); loadDay('refresh'); toast('重新讀取學生資料與課表…'); };
 </script>
 </body>
 </html>
