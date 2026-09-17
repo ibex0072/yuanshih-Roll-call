@@ -58,6 +58,14 @@ button{cursor:pointer}
 .ditem .n{font-weight:500}
 .ditem .n small{color:var(--muted);font-weight:400;margin-left:4px}
 .ditem .n small.warn{color:var(--late)}
+.dfilter{margin:0 0 10px;display:grid;gap:6px}
+.frow{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.frow>span{font-size:12px;color:var(--muted);width:30px}
+.fchip{border:1px solid var(--rule);background:#fff;border-radius:99px;padding:2px 10px;font-size:13px}
+.fchip:hover{border-color:var(--board)}
+.fchip.on{background:var(--board);border-color:var(--board);color:#fff}
+.fchip i{font-style:normal;font-size:11px;margin-left:4px;opacity:.7}
+.hiddenn{margin:8px 0 0}.hiddenn a{color:var(--board)}
 .batchbtn{width:100%;margin:2px 0 8px;border-style:dashed;color:var(--board)}
 .batchbar{margin-top:10px;padding-top:10px;border-top:2px solid var(--ink)}
 .batchbar p{margin:0 0 8px}
@@ -189,6 +197,7 @@ td.nw{white-space:nowrap;font-variant-numeric:tabular-nums}
         <button class="btn" id="todayBtn">今天</button>
         <button class="btn" id="nextDay">後一天</button>
       </div>
+      <div id="dayFilter" class="dfilter"></div>
       <h3>當天課程 <small id="dayCount"></small></h3>
       <button class="btn batchbtn" id="batchToggle" hidden>批次點名</button>
       <div id="dayList" class="daylist"><p class="muted">載入中…</p></div>
@@ -253,6 +262,7 @@ let DAY = { date: '', schedule: [], sessions: [] };
 let cur = null;
 let rollType = '個人', histType = '個人';
 let batchMode = false, batchSel = new Set();
+let dayFilter = { teacher: DEFAULT_TEACHER, subject: '' };   // 當天課程篩選，預設只看璇的課
 
 async function api(action, data = {}) {
   const r = await fetch(GAS_URL, {
@@ -357,8 +367,32 @@ function dayItems() {
   });
   return items;
 }
+/** 這堂課的老師：已點名用存檔的老師，否則用學生資料指定的老師，都沒有就是預設老師 */
+function teacherOf(type, name, subject, session) {
+  if (session && session.teacher) return session.teacher;
+  const ind = DB.individuals.find(s => s.name === name && s.subject === subject);
+  const group = DB.groups.find(g => g.name === name && g.subject === subject);
+  return (ind && ind.teacher) || (group && group.teacher) || DEFAULT_TEACHER;
+}
+function renderDayFilter(all) {
+  const teachers = ['', ...teacherList()];
+  if (dayFilter.teacher && !teachers.includes(dayFilter.teacher)) teachers.push(dayFilter.teacher);
+  const subjects = ['', ...new Set(all.map(i => i.subject))];
+  if (dayFilter.subject && !subjects.includes(dayFilter.subject)) dayFilter.subject = '';
+  const count = (f, v) => all.filter(i => (f === 'teacher' ? i.teacher : i.subject) === v).length;
+  const chip = (f, v) => {
+    const n = v ? count(f, v) : null;
+    return `<button class="fchip ${dayFilter[f] === v ? 'on' : ''}" data-f="${f}" data-v="${esc(v)}">${v ? esc(v) : '全部'}${n ? `<i>${n}</i>` : ''}</button>`;
+  };
+  $('#dayFilter').innerHTML =
+    `<div class="frow"><span>老師</span>${teachers.map(t => chip('teacher', t)).join('')}</div>` +
+    (subjects.length > 2 ? `<div class="frow"><span>科目</span>${subjects.map(s => chip('subject', s)).join('')}</div>` : '');
+}
 function renderDayList() {
-  const items = dayItems();
+  const all = dayItems().map(i => Object.assign(i, { teacher: teacherOf(i.type, i.name, i.subject, i.session) }));
+  renderDayFilter(all);
+  const items = all.filter(i => (!dayFilter.teacher || i.teacher === dayFilter.teacher) && (!dayFilter.subject || i.subject === dayFilter.subject));
+  const hiddenN = all.length - items.length;
   const done = items.filter(i => i.session).length;
   $('#dayCount').textContent = items.length ? `已點名 ${done}／${items.length}` : '';
   const pending = items.filter(i => !i.session);
@@ -369,17 +403,27 @@ function renderDayList() {
     $('#batchGo').textContent = `全部到課（${batchSel.size} 堂）`;
     $('#batchGo').disabled = !batchSel.size;
   }
+  const hiddenNote = hiddenN ? `<p class="muted hiddenn">另有 ${hiddenN} 堂不在篩選範圍內　<a href="#" id="showAll">顯示全部</a></p>` : '';
   if (!items.length) {
-    $('#dayList').innerHTML = '<p class="muted">這天沒有排定的課。可以直接在右側選擇學生或團班點名。</p>';
+    $('#dayList').innerHTML = (all.length
+      ? '<p class="muted">篩選條件下沒有課。</p>'
+      : '<p class="muted">這天沒有排定的課。可以直接在右側選擇學生或團班點名。</p>') + hiddenNote;
     return;
   }
   const curKey = cur ? `${cur.type}|${cur.target}|${cur.subject}` : '';
+  const showT = !dayFilter.teacher;
   $('#dayList').innerHTML = items.map(i => `
     <button class="ditem ${i.k === curKey && !batchMode ? 'cur' : ''} ${batchMode && i.session ? 'dim' : ''}" data-k="${esc(i.k)}" data-h="${i.hours || ''}" ${batchMode && i.session ? 'disabled' : ''}>
       <span class="t">${batchMode && !i.session ? `<span class="cb ${batchSel.has(i.k) ? 'on' : ''}" aria-hidden="true"></span>` : ''}${esc(i.time || (i.hours ? i.hours + ' 小時' : ''))}</span>
-      <span class="n">${esc(i.name)}<small>${esc(i.subject)}</small>${i.unsure ? '<small class="warn">科目待確認</small>' : ''}</span>
+      <span class="n">${esc(i.name)}<small>${esc(i.subject)}${showT ? '・' + esc(i.teacher) : ''}</small>${i.unsure ? '<small class="warn">科目待確認</small>' : ''}</span>
       <span class="tag ${i.session ? 'done' : ''}">${i.session ? '已點名' : '未點名'}</span>
-    </button>`).join('');
+    </button>`).join('') + hiddenNote;
+}
+function visibleDayItems() {
+  return dayItems().filter(i => {
+    const t = teacherOf(i.type, i.name, i.subject, i.session);
+    return (!dayFilter.teacher || t === dayFilter.teacher) && (!dayFilter.subject || i.subject === dayFilter.subject);
+  });
 }
 
 /* ---------- 點名單 ---------- */
@@ -564,13 +608,13 @@ function defaultSession(item) {
   return {
     date: DAY.date, type: item.type, target: item.name, subject: item.subject,
     hours: Number(item.hours) || 1.5, progress: '', note: '',
-    teacher: (ind && ind.teacher) || (group && group.teacher) || DEFAULT_TEACHER,
+    teacher: teacherOf(item.type, item.name, item.subject, null),
     attendees: members.map(n => ({ name: n, status: '出席', note: '' }))
   };
 }
 function startBatch() {
   batchMode = true;
-  batchSel = new Set(dayItems().filter(i => !i.session && !i.unsure).map(i => i.k));
+  batchSel = new Set(visibleDayItems().filter(i => !i.session && !i.unsure).map(i => i.k));
   renderDayList();
 }
 function stopBatch() { batchMode = false; batchSel.clear(); renderDayList(); }
@@ -665,6 +709,16 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
 });
 $('#date').onchange = () => { batchMode = false; loadDay(); };
 $('#batchToggle').onclick = startBatch;
+$('#dayFilter').onclick = e => {
+  const b = e.target.closest('.fchip'); if (!b) return;
+  dayFilter[b.dataset.f] = b.dataset.v;
+  renderDayList();
+};
+$('#dayList').addEventListener('click', e => {
+  if (e.target.id !== 'showAll') return;
+  e.preventDefault(); e.stopPropagation();
+  dayFilter = { teacher: '', subject: '' }; renderDayList();
+}, true);
 $('#batchCancel').onclick = stopBatch;
 $('#batchGo').onclick = runBatch;
 $('#prevDay').onclick = () => { batchMode = false; $('#date').value = shiftDay($('#date').value, -1); loadDay(); };
