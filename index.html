@@ -130,9 +130,18 @@ button{cursor:pointer}
 .lastprog div+div{margin-top:4px}
 .actions{display:flex;justify-content:space-between;align-items:center;margin-top:20px;gap:10px}
 
-.hbar{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;padding:14px 16px;margin-bottom:16px}
-.hbar .fld{flex:0 0 150px}
-.hbar .grow{flex:1 1 200px}
+.hbar{display:grid;gap:10px;padding:14px 16px;margin-bottom:16px}
+.hrow{display:flex;gap:8px;flex-wrap:wrap}
+.hsearch{flex:1 1 180px;width:auto}
+.hbar .frow>span:first-child{width:30px}
+.targets{padding:8px 0;border-top:1px solid var(--rule-soft);border-bottom:1px solid var(--rule-soft)}
+.tgt{border:1px solid var(--rule);background:#fff;border-radius:8px;padding:5px 12px;font-size:14px}
+.tgt small{color:var(--muted);margin-left:4px}
+.tgt:hover{border-color:var(--board)}
+.tgt.on{background:var(--board);border-color:var(--board);color:#fff}.tgt.on small{color:#D6E3DC}
+.pchips{display:flex;flex-wrap:wrap;gap:5px}
+.hperiod .mon{width:140px;padding:4px 8px;font-size:13px}
+.hperiod #histPrint{margin-left:auto}
 .hout{padding:22px 24px}
 .htitle{font:900 26px/1.3 var(--serif);margin:0}
 .hsub{color:var(--muted);font-size:13px;margin:2px 0 14px}
@@ -145,8 +154,10 @@ th,td{border-bottom:1px solid var(--rule-soft);padding:8px 8px;text-align:left;v
 th{font-weight:500;color:var(--muted);font-size:12px;border-bottom:1px solid var(--rule);white-space:nowrap}
 td.pre{white-space:pre-wrap;min-width:180px}
 td.nw{white-space:nowrap;font-variant-numeric:tabular-nums}
-.mx th,.mx td{text-align:center;padding:6px 4px;border-left:1px solid var(--rule-soft)}
-.mx th:first-child,.mx td:first-child{text-align:left;border-left:0;white-space:nowrap;font-weight:600}
+.mx th,.mx td{text-align:center;padding:6px 4px;border-left:1px solid var(--rule-soft);min-width:34px}
+.mx th:first-child,.mx td:first-child{text-align:left;border-left:0;white-space:nowrap;font-weight:600;position:sticky;left:0;background:var(--sheet);z-index:1;box-shadow:1px 0 0 var(--rule)}
+.mx th.sum,.mx td.sum{background:#F2F5F1}
+.mx.dense{font-size:12px}.mx.dense th,.mx.dense td{padding:5px 2px;min-width:28px}
 .mk{font:900 15px var(--serif)}
 .mk.出席{color:var(--present)} .mk.遲到{color:var(--late)} .mk.請假{color:var(--leave)} .mk.缺席{color:var(--absent)}
 .h3{font:600 16px var(--serif);margin:0 0 6px}
@@ -159,8 +170,11 @@ td.nw{white-space:nowrap;font-variant-numeric:tabular-nums}
 #toast.bad{background:var(--absent)}
 .printonly{display:none}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+@page{size:A4 landscape;margin:10mm}
 @media print{
   body{background:#fff;font-size:12px}
+  .mx th:first-child,.mx td:first-child{position:static;box-shadow:none}
+  tr{break-inside:avoid}
   .top,.hbar,.noprint{display:none!important}
   .wrap{padding:0;max-width:none}
   .panel{border:0}
@@ -221,15 +235,20 @@ td.nw{white-space:nowrap;font-variant-numeric:tabular-nums}
 
   <main id="view-hist" hidden>
     <div class="panel hbar">
-      <div class="seg" id="histSeg"><button data-type="個人" class="on">個人</button><button data-type="團班">團班</button></div>
-      <label class="fld grow">搜尋<input id="histSearch" placeholder="姓名"></label>
-      <label class="fld grow">對象<select id="histTarget"></select></label>
-      <label class="fld">起始月份<input type="month" id="mFrom"></label>
-      <label class="fld">結束月份<input type="month" id="mTo"></label>
-      <button class="btn primary" id="histGo">查詢</button>
-      <button class="btn" id="histPrint">列印</button>
+      <div class="hrow">
+        <div class="seg" id="histSeg"><button data-type="個人" class="on">個人</button><button data-type="團班">團班</button></div>
+        <input class="inp hsearch" id="histSearch" placeholder="搜尋姓名">
+      </div>
+      <div class="frow" id="hTeacher"></div>
+      <div class="frow" id="hSubject"></div>
+      <div class="frow targets" id="hTargets"></div>
+      <div class="frow hperiod">
+        <span>期間</span><span id="hPeriods" class="pchips"></span>
+        <input type="month" id="mFrom" class="inp mon" aria-label="起始月份"><span class="muted">～</span><input type="month" id="mTo" class="inp mon" aria-label="結束月份">
+        <button class="btn" id="histPrint">列印</button>
+      </div>
     </div>
-    <div id="histOut" class="panel hout"><p class="muted">選擇學生或團班後按「查詢」，會列出出缺席與每堂課的進度。</p></div>
+    <div id="histOut" class="panel hout"><p class="muted">點選上方的學生或團班，就會列出出缺席與每堂課的進度。</p></div>
   </main>
 </div>
 
@@ -323,7 +342,7 @@ async function loadDay(action = 'dayView') {
     if (r.individuals) {
       DB = { individuals: r.individuals, groups: r.groups };
       fillSelect($('#rollTarget'), rollType, $('#rollSearch').value.trim(), $('#rollTarget').value);
-      fillSelect($('#histTarget'), histType, $('#histSearch').value.trim(), $('#histTarget').value);
+      if (!$('#view-hist').hidden) renderHistControls();
     }
     if (DAY.date !== date) return;
     DAY.schedule = r.schedule; DAY.sessions = r.sessions;
@@ -643,14 +662,66 @@ async function runBatch() {
 }
 
 /* ---------- 點名紀錄查詢 ---------- */
+/* 查詢篩選 */
+let histFilter = { teacher: DEFAULT_TEACHER, subject: '', key: '', period: 'term' };
+let histLast = null;
+
+function termRange(offset) {   // 台灣學期：上學期 8月～1月、下學期 2月～7月
+  const now = new Date();
+  let y = now.getFullYear(), m = now.getMonth() + 1;
+  let sy, sm;
+  if (m >= 8) { sy = y; sm = 8; } else if (m === 1) { sy = y - 1; sm = 8; } else { sy = y; sm = 2; }
+  let idx = sy * 12 + (sm - 1) + offset * 6;
+  sy = Math.floor(idx / 12); sm = idx % 12 + 1;
+  const ey = sm === 8 ? sy + 1 : sy, em = sm === 8 ? 1 : 7;
+  const acad = (sm === 8 ? sy : sy - 1) - 1911, term = sm === 8 ? 1 : 2;
+  const f = (yy, mm) => yy + '-' + String(mm).padStart(2, '0');
+  return { from: f(sy, sm), to: f(ey, em), label: `${acad}-${term}` };
+}
+function periodRange(p) {
+  const now = new Date(), f = d => ymd(d).slice(0, 7);
+  if (p === 'month') return { from: f(now), to: f(now) };
+  if (p === 'lastMonth') { const d = new Date(now.getFullYear(), now.getMonth() - 1, 1); return { from: f(d), to: f(d) }; }
+  if (p === 'term') return termRange(0);
+  if (p === 'lastTerm') return termRange(-1);
+  if (p === 'all') return { from: '', to: '' };
+  return null;
+}
+function renderHistControls() {
+  const chip = (f, v, label, n) => `<button class="fchip ${histFilter[f] === v ? 'on' : ''}" data-f="${f}" data-v="${esc(v)}">${esc(label)}${n ? `<i>${n}</i>` : ''}</button>`;
+  const base = optionTargets(histType);
+  const q = $('#histSearch').value.trim();
+  const teachers = ['', ...teacherList()];
+  $('#hTeacher').innerHTML = '<span>老師</span>' + teachers.map(t => chip('teacher', t, t || '全部', t ? base.filter(o => o.teacher === t).length : 0)).join('');
+  const subjects = ['', ...new Set(base.map(o => o.subject))];
+  if (!subjects.includes(histFilter.subject)) histFilter.subject = '';
+  $('#hSubject').innerHTML = '<span>科目</span>' + subjects.map(s => chip('subject', s, s || '全部', 0)).join('');
+  const shown = base.filter(o => (!histFilter.teacher || o.teacher === histFilter.teacher) && (!histFilter.subject || o.subject === histFilter.subject) && (!q || o.name.includes(q)));
+  $('#hTargets').innerHTML = '<span>對象</span>' + (shown.length
+    ? shown.map(o => `<button class="tgt ${histFilter.key === o.key ? 'on' : ''}" data-k="${esc(o.key)}">${esc(o.name)}<small>${esc(o.subject)}</small></button>`).join('')
+    : '<span class="muted">沒有符合的學生或團班</span>');
+  const t0 = termRange(0), t1 = termRange(-1);
+  const periods = [['term', `本學期 ${t0.label}`], ['lastTerm', `上學期 ${t1.label}`], ['month', '本月'], ['lastMonth', '上個月'], ['all', '全部']];
+  $('#hPeriods').innerHTML = periods.map(([v, l]) => chip('period', v, l, 0)).join('');
+  const r = periodRange(histFilter.period);
+  if (r) { $('#mFrom').value = r.from; $('#mTo').value = r.to; }
+}
+function optionTargets(type) {
+  const list = type === '團班'
+    ? DB.groups.map(g => ({ key: `團班|${g.name}|${g.subject}`, name: g.name, subject: g.subject }))
+    : DB.individuals.map(s => ({ key: `個人|${s.name}|${s.subject}`, name: s.name, subject: s.subject }));
+  return list.map(o => Object.assign(o, { teacher: teacherOf(type, o.name, o.subject, null) }));
+}
 async function runHist() {
-  const key = $('#histTarget').value;
-  if (!key) return toast('請先選擇學生或團班', true);
+  const key = histFilter.key;
+  if (!key) return;
   const [type, name, subject] = key.split('|');
   const out = $('#histOut');
   out.innerHTML = '<p class="muted">查詢中…</p>';
   try {
     const r = await api('history', { type, target: name, subject });
+    if (histFilter.key !== key) return;
+    histLast = { sessions: r.sessions, type, name, subject };
     renderHist(r.sessions, type, name, subject);
   } catch (e) { out.innerHTML = `<p class="muted">查詢失敗：${esc(e.message)}</p>`; }
 }
@@ -669,12 +740,12 @@ function renderHist(all, type, name, subject) {
     const members = [];
     list.forEach(s => s.attendees.forEach(a => { if (!members.includes(a.name)) members.push(a.name); }));
     const totalH = list.reduce((t, s) => t + (s.hours || 0), 0);
-    const matrix = `<div class="scroll"><table class="mx"><thead><tr><th>學生</th>${list.map(s => `<th>${short(s.date)}<br>${s.weekday}</th>`).join('')}
-        ${STATUSES.map(s => `<th>${s.ch}</th>`).join('')}</tr></thead><tbody>
+    const matrix = `<div class="scroll"><table class="mx ${list.length > 12 ? 'dense' : ''}"><thead><tr><th>學生</th>${list.map(s => `<th>${short(s.date)}<br>${s.weekday}</th>`).join('')}
+        ${STATUSES.map(s => `<th class="sum">${s.ch}</th>`).join('')}</tr></thead><tbody>
       ${members.map(n => {
         const cnt = { 出席: 0, 遲到: 0, 請假: 0, 缺席: 0 };
         const cells = list.map(s => { const a = s.attendees.find(x => x.name === n); if (!a) return '<td class="muted">–</td>'; cnt[a.status] = (cnt[a.status] || 0) + 1; return `<td><span class="mk ${esc(a.status)}" title="${esc(a.status + (a.note ? '：' + a.note : ''))}">${CH[a.status] || esc(a.status)}</span></td>`; }).join('');
-        return `<tr><td>${esc(n)}</td>${cells}${STATUSES.map(s => `<td>${cnt[s.name] || ''}</td>`).join('')}</tr>`;
+        return `<tr><td>${esc(n)}</td>${cells}${STATUSES.map(s => `<td class="sum">${cnt[s.name] || ''}</td>`).join('')}</tr>`;
       }).join('')}</tbody></table></div>`;
     const log = `<h3 class="h3">課程進度</h3><div class="scroll"><table><thead><tr><th>日期</th><th>時數</th><th>未到／遲到</th><th>課程進度</th><th>作業與備註</th><th>老師</th></tr></thead><tbody>
       ${list.map(s => {
@@ -706,6 +777,7 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
   $('#view-roll').hidden = t.dataset.view !== 'roll';
   $('#view-hist').hidden = t.dataset.view !== 'hist';
+  if (t.dataset.view === 'hist') renderHistControls();
 });
 $('#date').onchange = () => { batchMode = false; loadDay(); };
 $('#batchToggle').onclick = startBatch;
@@ -748,10 +820,24 @@ $('#rollTarget').onchange = e => {
 $('#histSeg').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
   histType = b.dataset.type; setSeg('#histSeg', histType);
-  fillSelect($('#histTarget'), histType, $('#histSearch').value.trim());
+  renderHistControls();
 };
-$('#histSearch').oninput = () => fillSelect($('#histTarget'), histType, $('#histSearch').value.trim());
-$('#histGo').onclick = runHist;
+$('#histSearch').oninput = renderHistControls;
+$('.hbar').addEventListener('click', e => {
+  const c = e.target.closest('.fchip');
+  if (c) {
+    histFilter[c.dataset.f] = c.dataset.v;
+    renderHistControls();
+    if (c.dataset.f === 'period' && histLast) renderHist(histLast.sessions, histLast.type, histLast.name, histLast.subject);
+    return;
+  }
+  const t = e.target.closest('.tgt');
+  if (t) { histFilter.key = t.dataset.k; renderHistControls(); runHist(); }
+});
+['#mFrom', '#mTo'].forEach(s => $(s).onchange = () => {
+  histFilter.period = 'custom'; renderHistControls();
+  if (histLast) renderHist(histLast.sessions, histLast.type, histLast.name, histLast.subject);
+});
 $('#histPrint').onclick = () => window.print();
 
 /* ---------- 啟動 ---------- */
@@ -772,7 +858,6 @@ $('#histPrint').onclick = () => window.print();
   if (cdb) {
     DB = cdb;
     fillSelect($('#rollTarget'), '個人', '');
-    fillSelect($('#histTarget'), '個人', '');
   }
   loadDay('boot');
 })();
