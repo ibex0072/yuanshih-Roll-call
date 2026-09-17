@@ -60,7 +60,7 @@ button{cursor:pointer}
 .ditem .n small.warn{color:var(--late)}
 .dfilter{margin:0 0 10px;display:grid;gap:6px}
 .frow{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
-.frow>span{font-size:12px;color:var(--muted);width:30px}
+.frow>span:first-child{font-size:12px;color:var(--muted);width:30px;flex:none}
 .fchip{border:1px solid var(--rule);background:#fff;border-radius:99px;padding:2px 10px;font-size:13px}
 .fchip:hover{border-color:var(--board)}
 .fchip.on{background:var(--board);border-color:var(--board);color:#fff}
@@ -133,13 +133,13 @@ button{cursor:pointer}
 .hbar{display:grid;gap:10px;padding:14px 16px;margin-bottom:16px}
 .hrow{display:flex;gap:8px;flex-wrap:wrap}
 .hsearch{flex:1 1 180px;width:auto}
-.hbar .frow>span:first-child{width:30px}
 .targets{padding:8px 0;border-top:1px solid var(--rule-soft);border-bottom:1px solid var(--rule-soft)}
 .tgt{border:1px solid var(--rule);background:#fff;border-radius:8px;padding:5px 12px;font-size:14px}
 .tgt small{color:var(--muted);margin-left:4px}
 .tgt:hover{border-color:var(--board)}
 .tgt.on{background:var(--board);border-color:var(--board);color:#fff}.tgt.on small{color:#D6E3DC}
-.pchips{display:flex;flex-wrap:wrap;gap:5px}
+.hperiod .pchips{display:flex;flex-wrap:wrap;gap:5px;width:auto;font-size:inherit;color:inherit}
+.fchip,.tgt{white-space:nowrap}
 .hperiod .mon{width:140px;padding:4px 8px;font-size:13px}
 .hperiod #histPrint{margin-left:auto}
 .hout{padding:22px 24px}
@@ -242,6 +242,7 @@ td.nw{white-space:nowrap;font-variant-numeric:tabular-nums}
       <div class="frow" id="hTeacher"></div>
       <div class="frow" id="hSubject"></div>
       <div class="frow targets" id="hTargets"></div>
+      <div class="frow" id="hGroup"></div>
       <div class="frow hperiod">
         <span>期間</span><span id="hPeriods" class="pchips"></span>
         <input type="month" id="mFrom" class="inp mon" aria-label="起始月份"><span class="muted">～</span><input type="month" id="mTo" class="inp mon" aria-label="結束月份">
@@ -663,7 +664,7 @@ async function runBatch() {
 
 /* ---------- 點名紀錄查詢 ---------- */
 /* 查詢篩選 */
-let histFilter = { teacher: DEFAULT_TEACHER, subject: '', key: '', period: 'term' };
+let histFilter = { teacher: DEFAULT_TEACHER, subject: '', key: '', period: 'term', group: 'hide' };   // 個人紀錄預設不顯示團班課
 let histLast = null;
 
 function termRange(offset) {   // 台灣學期：上學期 8月～1月、下學期 2月～7月
@@ -700,6 +701,8 @@ function renderHistControls() {
   $('#hTargets').innerHTML = '<span>對象</span>' + (shown.length
     ? shown.map(o => `<button class="tgt ${histFilter.key === o.key ? 'on' : ''}" data-k="${esc(o.key)}">${esc(o.name)}<small>${esc(o.subject)}</small></button>`).join('')
     : '<span class="muted">沒有符合的學生或團班</span>');
+  $('#hGroup').hidden = histType !== '個人';
+  $('#hGroup').innerHTML = '<span>團班</span>' + chip('group', 'hide', '不顯示團班課', 0) + chip('group', 'show', '顯示團班課', 0);
   const t0 = termRange(0), t1 = termRange(-1);
   const periods = [['term', `本學期 ${t0.label}`], ['lastTerm', `上學期 ${t1.label}`], ['month', '本月'], ['lastMonth', '上個月'], ['all', '全部']];
   $('#hPeriods').innerHTML = periods.map(([v, l]) => chip('period', v, l, 0)).join('');
@@ -728,11 +731,14 @@ async function runHist() {
 
 function renderHist(all, type, name, subject) {
   const from = $('#mFrom').value, to = $('#mTo').value;
-  const list = all.filter(s => (!from || s.date.slice(0, 7) >= from) && (!to || s.date.slice(0, 7) <= to));
-  const range = from || to ? `${from || '最早'}～${to || '最新'}` : '全部期間';
+  const inRange = all.filter(s => (!from || s.date.slice(0, 7) >= from) && (!to || s.date.slice(0, 7) <= to));
+  const hideGroup = type === '個人' && histFilter.group !== 'show';
+  const list = hideGroup ? inRange.filter(s => s.type !== '團班') : inRange;
+  const groupN = inRange.length - list.length;
+  const range = (from || to ? `${from || '最早'}～${to || '最新'}` : '全部期間') + (type === '個人' ? (hideGroup ? '　只含個人課' : '　含團班課') : '');
   const out = $('#histOut');
   const head = `<h2 class="htitle">${esc(name)}　${esc(subject)} 點名紀錄</h2>
-    <p class="hsub">${type}　${range}　共 ${list.length} 堂<span class="printonly">　源石學館</span></p>`;
+    <p class="hsub">${type}　${range}　共 ${list.length} 堂${groupN ? `<span class="noprint">（另有 ${groupN} 堂團班課未顯示）</span>` : ''}<span class="printonly">　源石學館</span></p>`;
   if (!list.length) { out.innerHTML = head + '<p class="muted">這段期間沒有點名紀錄。可以換個月份範圍，或到「點名」分頁新增。</p>'; return; }
   const short = d => d.slice(5).replace('-', '/');
 
@@ -828,7 +834,7 @@ $('.hbar').addEventListener('click', e => {
   if (c) {
     histFilter[c.dataset.f] = c.dataset.v;
     renderHistControls();
-    if (c.dataset.f === 'period' && histLast) renderHist(histLast.sessions, histLast.type, histLast.name, histLast.subject);
+    if ((c.dataset.f === 'period' || c.dataset.f === 'group') && histLast) renderHist(histLast.sessions, histLast.type, histLast.name, histLast.subject);
     return;
   }
   const t = e.target.closest('.tgt');
